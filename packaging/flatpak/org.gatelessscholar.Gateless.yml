@@ -1,0 +1,40 @@
+# Build:  flatpak-builder --user --install --force-clean build-dir packaging/flatpak/org.gatelessscholar.Gateless.yml
+# Offline builds need vendored crates: run `cargo vendor` first, or generate cargo-sources.json with
+# flatpak-builder-tools' flatpak-cargo-generator.py and add it to `sources`.
+app-id: org.gatelessscholar.Gateless
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: gateless
+finish-args:
+  - --share=network          # research APIs, news, images, API-key model providers, Ollama on localhost
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --talk-name=org.freedesktop.secrets   # API keys in the system keyring
+  - --talk-name=org.freedesktop.portal.Desktop
+  # Local AI CLIs (claude, gemini, codex) run on the host with the user's own login:
+  - --talk-name=org.freedesktop.Flatpak
+  - --filesystem=xdg-run/ollama:ro
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/gateless/cargo
+modules:
+  - name: gateless
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network   # remove when building from vendored sources
+    build-commands:
+      - cargo build --release --locked
+      - install -Dm755 target/release/gateless /app/bin/gateless
+      - install -Dm644 assets/org.gatelessscholar.Gateless.desktop /app/share/applications/org.gatelessscholar.Gateless.desktop
+      - install -Dm644 assets/org.gatelessscholar.Gateless.metainfo.xml /app/share/metainfo/org.gatelessscholar.Gateless.metainfo.xml
+      - install -Dm644 assets/org.gatelessscholar.Gateless.svg /app/share/icons/hicolor/scalable/apps/org.gatelessscholar.Gateless.svg
+    sources:
+      - type: dir
+        path: ../..

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.gatelessscholar.Gateless</id>
+  <name>Gateless Scholar</name>
+  <summary>Research, ungated</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <description>
+    <p>A way into research for people without university logins: Scholar-style search across OpenAlex,
+    Semantic Scholar, arXiv and Crossref; a daily Discover feed of research and news; and AI-written,
+    fully cited articles built from real sources you can click through.</p>
+    <p>Every passage is marked as original text, AI-reworded original, or AI-written. Papers with only a
+    free abstract get a clearly labelled AI interpretation that always links to the real paper.</p>
+  </description>
+  <developer id="io.github.brattzachary-bit">
+    <name>Gateless Scholar contributors</name>
+  </developer>
+  <launchable type="desktop-id">org.gatelessscholar.Gateless.desktop</launchable>
+  <url type="homepage">https://github.com/brattzachary-bit/gateless-scholar</url>
+  <content_rating type="oars-1.1"/>
+  <releases><release version="0.1.0" date="2026-11-25"/></releases>
+</component>

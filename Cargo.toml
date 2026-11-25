@@ -1,0 +1,81 @@
+[package]
+name = "gateless"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Gateless Scholar: research, ungated. Search papers, a daily research and news feed, and AI-written, fully cited articles with every passage's origin marked."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/brattzachary-bit/gateless-scholar"
+readme = "README.md"
+keywords = ["research", "papers", "egui", "open-access", "scholar"]
+categories = ["science", "gui"]
+
+[[bin]]
+name = "gateless"
+path = "src/main.rs"
+
+[dependencies]
+# GUI: Artcraft's Craft suite libraries (craft-ui controls, craft-window title bar policy) on egui.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "2c81ed850319ef3504ce56d82379b346522af18e" }
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "2c81ed850319ef3504ce56d82379b346522af18e", features = ["egui"] }
+egui = "0.37"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "accesskit", "wayland", "x11", "links", "clipboard", "persistence"] }
+egui_extras = { version = "0.37", default-features = false, features = ["image", "svg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+
+# Storage, secrets, files
+rusqlite = { version = "0.37", features = ["bundled"] }
+keyring = { version = "3", features = ["async-secret-service", "tokio", "crypto-rust"] }
+directories = "6"
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+open = "5"
+
+# Network and async
+reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "rustls-tls", "stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "fs", "process", "io-util", "macros"] }
+futures = "0.3"
+
+# Data
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+quick-xml = "0.37"
+regex = "1"
+html-escape = "0.2"
+url = "2"
+sha2 = "0.10"
+hex = "0.4"
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+
+# Export
+zip = { version = "2", default-features = false, features = ["deflate"] }
+pdf-extract = "0.12.1"
+
+[patch.crates-io]
+# The Craft suite's egui and winit forks (same revs as craft-libs at the pinned commit).
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

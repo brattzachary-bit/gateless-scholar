@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Gateless Scholar
+GenericName=Research Reader
+Comment=Research, ungated: search papers, a daily research and news feed, and fully cited AI articles
+Exec=gateless
+Icon=org.gatelessscholar.Gateless
+Terminal=false
+Categories=Education;Science;Literature;
+Keywords=research;papers;science;scholar;open access;news;
+StartupWMClass=org.gatelessscholar.Gateless
