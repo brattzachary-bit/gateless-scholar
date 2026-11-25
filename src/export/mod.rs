@@ -60,6 +60,7 @@ pub fn pdf_bytes(a: &Article, style: CitationStyle) -> Result<(Vec<u8>, usize)> 
 /// Print via the system: writes a temporary PDF and sends it to the default printer with
 /// `lp`, falling back to opening the PDF in the default viewer to print from there.
 /// Returns a message for the user saying what happened.
+#[cfg(not(target_os = "android"))]
 pub fn print(a: &Article, style: CitationStyle) -> Result<String> {
     // TODO(windows): no `lp`; open the PDF with the default viewer (or ShellExecute "print").
     let path = print_pdf_path(a, style)?;
@@ -92,6 +93,7 @@ pub fn print_pdf_path(a: &Article, style: CitationStyle) -> Result<PathBuf> {
 
 /// Open the user's mail client with the article as text (mailto: subject + body; long
 /// articles are truncated with a note and the .txt saved to a temp file whose path is given).
+#[cfg(not(target_os = "android"))]
 pub fn email(a: &Article, style: CitationStyle) -> Result<()> {
     let draft = prepare_email(a, style)?;
     // TODO(windows): `open` handles mailto: there too, but very long URLs may be cut by the shell.

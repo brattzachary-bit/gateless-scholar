@@ -1,6 +1,6 @@
 [package]
 name = "gateless"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.97"
 description = "Gateless Scholar: research, ungated. Search papers, a daily research and news feed, and AI-written, fully cited articles with every passage's origin marked."
@@ -9,6 +9,12 @@ repository = "https://github.com/brattzachary-bit/gateless-scholar"
 readme = "README.md"
 keywords = ["research", "papers", "egui", "open-access", "scholar"]
 categories = ["science", "gui"]
+
+[lib]
+name = "gateless"
+path = "src/lib.rs"
+# cdylib for the Android app (loaded by NativeActivity), rlib for the desktop binary.
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "gateless"
@@ -19,16 +25,12 @@ path = "src/main.rs"
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "2c81ed850319ef3504ce56d82379b346522af18e" }
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "2c81ed850319ef3504ce56d82379b346522af18e", features = ["egui"] }
 egui = "0.37"
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "accesskit", "wayland", "x11", "links", "clipboard", "persistence"] }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "links", "persistence"] }
 egui_extras = { version = "0.37", default-features = false, features = ["image", "svg"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
 # Storage, secrets, files
 rusqlite = { version = "0.37", features = ["bundled"] }
-keyring = { version = "3", features = ["async-secret-service", "tokio", "crypto-rust"] }
-directories = "6"
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
-open = "5"
 
 # Network and async
 reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "rustls-tls", "stream"] }
@@ -46,7 +48,6 @@ url = "2"
 sha2 = "0.10"
 hex = "0.4"
 log = "0.4"
-env_logger = "0.11"
 anyhow = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
@@ -54,6 +55,51 @@ uuid = { version = "1", features = ["v4"] }
 # Export
 zip = { version = "2", default-features = false, features = ["deflate"] }
 pdf-extract = "0.12.1"
+
+# Desktop (Linux) only.
+# TODO(windows): keyring and rfd need their Windows backends enabled here.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["wayland", "x11", "clipboard", "accesskit"] }
+keyring = { version = "3", features = ["async-secret-service", "tokio", "crypto-rust"] }
+directories = "6"
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+open = "5"
+env_logger = "0.11"
+
+# Android only.
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["android-native-activity"] }
+# The same winit eframe uses (patched to the Craft fork below), for the AndroidApp handle.
+winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+jni = "0.21"
+ndk-context = "0.1"
+android_logger = "0.15"
+
+[package.metadata.android]
+package = "org.gatelessscholar.gateless"
+apk_name = "GatelessScholar"
+build_targets = ["aarch64-linux-android"]
+resources = "android/res"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[package.metadata.android.application]
+label = "Gateless Scholar"
+icon = "@mipmap/ic_launcher"
+theme = "@android:style/Theme.DeviceDefault.NoActionBar"
+# Plain http for Ollama / "Use my PC" on the local network or Tailscale.
+uses_cleartext_traffic = true
+
+[package.metadata.android.application.activity]
+config_changes = "orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode"
+launch_mode = "singleTop"
+orientation = "unspecified"
+window_soft_input_mode = "adjustResize"
 
 [patch.crates-io]
 # The Craft suite's egui and winit forks (same revs as craft-libs at the pinned commit).

@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -158,15 +158,6 @@ impl StorageUsage {
 }
 
 impl Db {
-    /// Open (or create) the database in the platform data directory.
-    // TODO(windows): `directories` gives %APPDATA% on Windows; check the path is writable.
-    pub fn open_default() -> Result<Self> {
-        let dirs = directories::ProjectDirs::from("org", "GatelessScholar", "gateless").context("no home directory")?;
-        let dir = dirs.data_dir().to_path_buf();
-        std::fs::create_dir_all(&dir)?;
-        Self::open(&dir)
-    }
-
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir.join("images"))?;
         let conn = Connection::open(dir.join("gateless.sqlite3"))?;

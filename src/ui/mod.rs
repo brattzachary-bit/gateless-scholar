@@ -25,17 +25,32 @@ pub const TITLE_BAR_HEIGHT: f32 = 50.0;
 
 impl App {
     pub fn draw(&mut self, ui: &mut egui::Ui) {
-        let integrated = matches!(self.decision.frame, Frame::Integrated(_));
-        self.title_bar(ui, integrated);
-        if self.settings.sidebar_open {
-            self.sidebar(ui);
+        let integrated = matches!(self.frame, Frame::Integrated(_));
+        self.mobile = ui.ctx().content_rect().width() < 700.0;
+        // Android draws edge to edge: keep clear of the status and gesture bars.
+        let ppp = ui.ctx().pixels_per_point();
+        let (top, bottom) = crate::platform::system_bar_insets_px(ui.ctx().content_rect().height() * ppp);
+        if top > 0.0 {
+            egui::Panel::top("status_bar_inset").exact_size(top / ppp).frame(egui::Frame::new().fill(self.pal.sidebar)).show(ui, |_| {});
+        }
+        if bottom > 0.0 {
+            egui::Panel::bottom("nav_bar_inset").exact_size(bottom / ppp).frame(egui::Frame::new().fill(self.pal.bg)).show(ui, |_| {});
+        }
+        if self.mobile {
+            self.mobile_title_bar(ui);
+        } else {
+            self.title_bar(ui, integrated);
+            if self.settings.sidebar_open {
+                self.sidebar(ui);
+            }
         }
         if let View::Reader(key) = self.view.clone()
             && self.readers.get(&key).is_some_and(|r| r.ask_open)
         {
             self.ask_panel(ui, &key);
         }
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(self.pal.bg).inner_margin(egui::Margin::symmetric(16, 0))).show(ui, |ui| match self.view.clone() {
+        let margin = if self.mobile { 8 } else { 16 };
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(self.pal.bg).inner_margin(egui::Margin::symmetric(margin, 0))).show(ui, |ui| match self.view.clone() {
             View::Discover => self.discover_view(ui),
             View::Search => self.search_view(ui),
             View::Reader(key) => self.reader_view(ui, &key),
@@ -49,8 +64,11 @@ impl App {
             View::Bibliography => self.bibliography_view(ui),
             View::Settings => self.settings_view(ui),
         });
-        if integrated {
+        if integrated && !self.mobile {
             self.window_edges(ui);
+        }
+        if self.mobile && self.drawer_open {
+            self.drawer(ui);
         }
         self.image_viewer(ui);
         self.modals(ui);
@@ -70,7 +88,7 @@ impl App {
                 if integrated {
                     craft_window::title_bar::empty_area(ui, rect);
                 }
-                let captions = match &self.decision.frame {
+                let captions = match &self.frame {
                     Frame::Integrated(c) => Some(c.clone()),
                     _ => None,
                 };
@@ -142,6 +160,78 @@ impl App {
                     });
                 });
             });
+    }
+
+    /// Phone title bar: menu, logo, search, notifications.
+    fn mobile_title_bar(&mut self, ui: &mut egui::Ui) {
+        let pal = self.pal;
+        egui::Panel::top("title_bar").exact_size(52.0).frame(egui::Frame::new().fill(pal.sidebar).stroke(Stroke::new(1.0, pal.border)).inner_margin(egui::Margin::symmetric(6, 0))).show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                if icon_button(ui, &pal, "sidebar", "Menu", self.drawer_open).clicked() {
+                    self.drawer_open = !self.drawer_open;
+                }
+                if ui.add(icons::icon("logo", 22.0, pal.accent).sense(Sense::click())).clicked() {
+                    self.actions.push(Action::Navigate(View::Discover));
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let bell = icon_button(ui, &pal, "bell", "Notifications", matches!(self.view, View::Notifications));
+                    if self.unread_notifications > 0 {
+                        ui.painter().circle_filled(bell.rect.right_top() + vec2(-7.0, 7.0), 4.0, pal.danger);
+                    }
+                    if bell.clicked() {
+                        self.actions.push(Action::Navigate(View::Notifications));
+                    }
+                    let w = ui.available_width() - 4.0;
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| self.search_bar(ui, w));
+                });
+            });
+        });
+        if self.daily.running {
+            let frac = if self.daily.total > 0 { self.daily.done as f32 / self.daily.total as f32 } else { 0.0 };
+            egui::Panel::top("daily_progress").exact_size(3.0).frame(egui::Frame::new()).show(ui, |ui| {
+                ui.add(egui::ProgressBar::new(frac).desired_height(3.0).fill(pal.accent));
+            });
+        }
+    }
+
+    /// Phone navigation: a drawer sliding over the content; tapping outside closes it.
+    fn drawer(&mut self, ui: &mut egui::Ui) {
+        let pal = self.pal;
+        let ctx = ui.ctx().clone();
+        let screen = ctx.content_rect();
+        let ppp = ctx.pixels_per_point();
+        let (top, bottom) = crate::platform::system_bar_insets_px(screen.height() * ppp);
+        let area = egui::Rect::from_min_max(screen.min + vec2(0.0, top / ppp), screen.max - vec2(0.0, bottom / ppp));
+        let width = (area.width() * 0.82).min(320.0);
+        let mut close = false;
+        // One layer, drawn in order: the dimmed backdrop (tap to close), then the drawer on top.
+        egui::Area::new(egui::Id::unique("drawer")).order(egui::Order::Foreground).fixed_pos(area.min).show(&ctx, |ui| {
+            // The backdrop only dims (no widget under the drawer's items); a tap beside the
+            // drawer closes it.
+            ui.painter().rect_filled(area, 0.0, Color32::from_black_alpha(140));
+            if ui.input(|i| i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|p| p.x > area.left() + width && area.contains(p))) {
+                close = true;
+            }
+            let rect = egui::Rect::from_min_size(area.min, vec2(width, area.height()));
+            ui.painter().rect_filled(rect, 0.0, pal.sidebar);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 10.0))), |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(icons::icon("logo", 22.0, pal.accent));
+                    ui.label(egui::RichText::new("Gateless Scholar").font(theme::bold(16.0)));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let dark = self.settings.theme == ThemePref::Dark;
+                        if icon_button(ui, &pal, if dark { "sun" } else { "moon" }, "Light / dark mode", false).clicked() {
+                            self.actions.push(Action::ToggleTheme);
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+                self.sidebar_contents(ui);
+            });
+        });
+        if close {
+            self.drawer_open = false;
+        }
     }
 
     fn search_bar(&mut self, ui: &mut egui::Ui, width: f32) {
@@ -266,43 +356,7 @@ impl App {
             .exact_size(width)
             .resizable(false)
             .frame(egui::Frame::new().fill(pal.sidebar).inner_margin(egui::Margin { left: 8, right: 8, top: 10, bottom: 8 }))
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    let unread = self.unread_notifications;
-                    let queued = self.db.queue().iter().filter(|q| matches!(q.status, crate::db::QueueStatus::Queued | crate::db::QueueStatus::Running)).count();
-                    self.nav_item(ui, "compass", "Discover", View::Discover, None);
-                    self.nav_item(ui, "search", "Search", View::Search, None);
-                    ui.add_space(6.0);
-                    self.nav_section(ui, "Library", |app, ui| {
-                        app.nav_item(ui, "heart", "Favourites", View::Saved(SavedList::Favourites), None);
-                        app.nav_item(ui, "clock", "Read Later", View::Saved(SavedList::ReadLater), None);
-                        app.nav_item(ui, "books", "Bookshelves", View::Bookshelves, None);
-                    });
-                    self.nav_section(ui, "Research", |app, ui| {
-                        app.nav_item(ui, "folder", "Projects", View::Projects(None), None);
-                        app.nav_item(ui, "note", "Notes", View::Notes(None), None);
-                        app.nav_item(ui, "quote", "Bibliography", View::Bibliography, None);
-                    });
-                    self.nav_section(ui, "Activity", |app, ui| {
-                        app.nav_item(ui, "history", "History", View::History, None);
-                        app.nav_item(ui, "queue", "Generation Queue", View::Queue, (queued > 0).then_some(queued));
-                        app.nav_item(ui, "bell", "Notifications", View::Notifications, (unread > 0).then_some(unread));
-                    });
-                    ui.add_space(6.0);
-                    self.nav_item(ui, "settings", "Settings", View::Settings, None);
-                    if !self.has_provider() {
-                        ui.add_space(10.0);
-                        egui::Frame::new().fill(pal.ai_soft).corner_radius(8).inner_margin(10).show(ui, |ui| {
-                            ui.label(egui::RichText::new("No AI model set up").strong().color(pal.ai));
-                            ui.label(egui::RichText::new("Search and real papers work now. Add a model to have articles written.").size(12.0).color(pal.text_weak));
-                            if ui.link("Set up a model…").clicked() {
-                                self.settings_ui.section = 1;
-                                self.actions.push(Action::Navigate(View::Settings));
-                            }
-                        });
-                    }
-                });
-            });
+            .show(ui, |ui| self.sidebar_contents(ui));
         // craft-ui resize handle on the sidebar's edge.
         let edge = panel.response.rect;
         let divider = Rect::from_min_max(egui::pos2(edge.right() - 2.0, edge.top()), egui::pos2(edge.right() + 2.0, edge.bottom()));
@@ -314,6 +368,47 @@ impl App {
         if r.response.drag_stopped() {
             self.actions.push(Action::SaveSettings);
         }
+    }
+
+
+    /// The navigation list (desktop sidebar and phone drawer).
+    fn sidebar_contents(&mut self, ui: &mut egui::Ui) {
+        let pal = self.pal;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            let unread = self.unread_notifications;
+            let queued = self.db.queue().iter().filter(|q| matches!(q.status, crate::db::QueueStatus::Queued | crate::db::QueueStatus::Running)).count();
+            self.nav_item(ui, "compass", "Discover", View::Discover, None);
+            self.nav_item(ui, "search", "Search", View::Search, None);
+            ui.add_space(6.0);
+            self.nav_section(ui, "Library", |app, ui| {
+                app.nav_item(ui, "heart", "Favourites", View::Saved(SavedList::Favourites), None);
+                app.nav_item(ui, "clock", "Read Later", View::Saved(SavedList::ReadLater), None);
+                app.nav_item(ui, "books", "Bookshelves", View::Bookshelves, None);
+            });
+            self.nav_section(ui, "Research", |app, ui| {
+                app.nav_item(ui, "folder", "Projects", View::Projects(None), None);
+                app.nav_item(ui, "note", "Notes", View::Notes(None), None);
+                app.nav_item(ui, "quote", "Bibliography", View::Bibliography, None);
+            });
+            self.nav_section(ui, "Activity", |app, ui| {
+                app.nav_item(ui, "history", "History", View::History, None);
+                app.nav_item(ui, "queue", "Generation Queue", View::Queue, (queued > 0).then_some(queued));
+                app.nav_item(ui, "bell", "Notifications", View::Notifications, (unread > 0).then_some(unread));
+            });
+            ui.add_space(6.0);
+            self.nav_item(ui, "settings", "Settings", View::Settings, None);
+            if !self.has_provider() {
+                ui.add_space(10.0);
+                egui::Frame::new().fill(pal.ai_soft).corner_radius(8).inner_margin(10).show(ui, |ui| {
+                    ui.label(egui::RichText::new("No AI model set up").strong().color(pal.ai));
+                    ui.label(egui::RichText::new("Search and real papers work now. Add a model to have articles written.").size(12.0).color(pal.text_weak));
+                    if ui.link("Set up a model…").clicked() {
+                        self.settings_ui.section = 1;
+                        self.actions.push(Action::Navigate(View::Settings));
+                    }
+                });
+            }
+        });
     }
 
     fn nav_section(&mut self, ui: &mut egui::Ui, title: &'static str, add: impl FnOnce(&mut Self, &mut egui::Ui)) {
@@ -489,7 +584,7 @@ impl App {
         let mut next: Option<Modal> = None;
         let mut modal = modal;
         let resp = egui::Modal::new(egui::Id::unique("modal")).show(&ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(440.0f32.min(ctx.content_rect().width() - 48.0));
             match &mut modal {
                 Modal::ClearCache => {
                     ui.heading("Clear cache?");
@@ -719,6 +814,24 @@ impl App {
             }
             if i.key_pressed(Key::Escape) && self.image_viewer.is_none() && self.modal.is_none() && !typing {
                 self.actions.push(Action::Back);
+            }
+            // Android's Back button / gesture: close what's open, else go back.
+            if i.consume_key(Modifiers::NONE, Key::BrowserBack) {
+                if self.drawer_open {
+                    self.drawer_open = false;
+                } else if self.image_viewer.is_some() {
+                    self.image_viewer = None;
+                } else if self.modal.as_ref().is_some_and(|m| !matches!(m, Modal::Welcome)) {
+                    self.modal = None;
+                } else if let View::Reader(k) = &self.view
+                    && self.readers.get(k).is_some_and(|r| r.ask_open)
+                {
+                    if let Some(r) = self.readers.get_mut(k) {
+                        r.ask_open = false;
+                    }
+                } else {
+                    self.actions.push(Action::Back);
+                }
             }
         });
     }

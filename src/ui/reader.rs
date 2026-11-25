@@ -29,6 +29,7 @@ impl App {
         let article = reader.article.clone();
         let ask_open = reader.ask_open;
         let learn_mode = reader.learn_mode;
+        let mobile = self.mobile;
         let data = self.card_data();
         let env = self.card_env(&data);
         let gen_state = self.gens.get(key);
@@ -71,7 +72,10 @@ impl App {
                     if icon_button(ui, &pal, "ask", "Ask a follow-up question (Ctrl+J)", ask_open).clicked() {
                         toggle_ask = true;
                     }
-                    widgets::doc_action_buttons(ui, &env, &doc, &mut acts);
+                    // Phones: favourite / read later / add / share live in the "more" menu.
+                    if !mobile {
+                        widgets::doc_action_buttons(ui, &env, &doc, &mut acts);
+                    }
                     ui.add_space(6.0);
                     let learn_btn = ui
                         .add(
@@ -150,7 +154,8 @@ impl App {
 
     pub fn ask_panel(&mut self, ui: &mut Ui, key: &str) {
         let pal = self.pal;
-        let width = self.settings.ask_panel_width.clamp(280.0, 600.0);
+        // Phones: the Ask panel takes the whole screen (Back closes it).
+        let width = if self.mobile { ui.ctx().content_rect().width() } else { self.settings.ask_panel_width.clamp(280.0, 600.0) };
         let mut acts = vec![];
         let panel = egui::Panel::right("ask_panel")
             .exact_size(width)
@@ -294,12 +299,16 @@ fn article_header(ui: &mut Ui, pal: &Palette, doc: &Doc, article: Option<&Articl
     };
     let is_ai = article.map(|a| a.kind != ArticleKind::FullText).unwrap_or(!matches!(doc.kind(), ContentKind::FreeFullText));
     let color = if is_ai { pal.ai } else { pal.badge_free };
-    ui.horizontal(|ui| {
+    // Wrapping row: on a phone the label and the key chip each take a line, and the label wraps
+    // (a non-wrapping row would widen the whole column off-screen).
+    ui.horizontal_wrapped(|ui| {
+        let max = ui.available_width();
         egui::Frame::new().fill(color.gamma_multiply(0.12)).corner_radius(12).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.set_max_width(max - 20.0);
+            ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
                 ui.add(icons::icon(if is_ai { "sparkle" } else { "book-open" }, 13.0, color));
-                ui.label(egui::RichText::new(kind_label).size(12.5).color(color));
+                ui.add(egui::Label::new(egui::RichText::new(kind_label).size(12.5).color(color)).wrap());
             });
         });
         // The marking key lives behind a small chip instead of a full-width box.
@@ -321,7 +330,8 @@ fn article_header(ui: &mut Ui, pal: &Palette, doc: &Doc, article: Option<&Articl
             },
         },
     };
-    ui.label(egui::RichText::new(title).font(theme::bold(29.0)).color(pal.text));
+    let size = if ui.available_width() < 500.0 { 23.0 } else { 29.0 };
+    ui.label(egui::RichText::new(title).font(theme::bold(size)).color(pal.text));
     if let Some(s) = article.and_then(|a| a.standfirst.clone()) {
         ui.add_space(4.0);
         // The standfirst is AI-written: AI colour plus a margin bar.
@@ -358,7 +368,8 @@ fn article_header(ui: &mut Ui, pal: &Palette, doc: &Doc, article: Option<&Articl
 /// A wide photo above the title (cover-fitted); click for full screen with source and licence.
 fn hero_image(ui: &mut Ui, pal: &Palette, images: &std::collections::HashMap<String, crate::app::ImgState>, img: &ImageRef, acts: &mut Vec<Action>) {
     let url = img.url.clone();
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 230.0), Sense::click());
+    let h = if ui.available_width() < 500.0 { 170.0 } else { 230.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
     match images.get(&url) {
         Some(crate::app::ImgState::Ready(tex)) => widgets::cover_image(ui, tex, rect, egui::CornerRadius::same(12)),
         Some(crate::app::ImgState::Failed) => {
@@ -584,9 +595,9 @@ fn streaming(ui: &mut Ui, pal: &Palette, images: &std::collections::HashMap<Stri
         ui.add_space(6.0);
         egui::Frame::new().stroke(Stroke::new(1.0, pal.border)).corner_radius(8).inner_margin(10).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spinner();
-                ui.label(egui::RichText::new("Writing the next section… (preview; citations are checked before it's shown)").size(12.0).color(pal.text_faint));
+                ui.add(egui::Label::new(egui::RichText::new("Writing the next section… (preview; citations are checked before it's shown)").size(12.0).color(pal.text_faint)).wrap());
             });
             let tail: String = g.delta.chars().rev().take(700).collect::<Vec<_>>().into_iter().rev().collect();
             ui.label(egui::RichText::new(tail).size(13.0).color(pal.ai.gamma_multiply(0.6)));
@@ -625,19 +636,18 @@ fn progress(ui: &mut Ui, pal: &Palette, g: &GenState, doc: &Doc, acts: &mut Vec<
             });
             return;
         }
-        ui.horizontal(|ui| {
+        // Wrapping rows throughout: a long status must never widen the reading column.
+        ui.horizontal_wrapped(|ui| {
             ui.spinner();
-            ui.label(egui::RichText::new(&g.text).strong());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(egui::RichText::new(eta(g)).size(12.5).color(pal.text_faint));
-            });
+            ui.add(egui::Label::new(egui::RichText::new(&g.text).strong()).wrap());
+            ui.label(egui::RichText::new(format!("· {}", eta(g))).size(12.5).color(pal.text_faint));
         });
         ui.add_space(4.0);
         ui.add(egui::ProgressBar::new(g.fraction).desired_height(6.0).fill(pal.accent));
         ui.add_space(4.0);
         let steps = ["Finding sources", "Reading papers", "Writing", "Checking citations"];
         let active = if g.fraction < 0.15 { 0 } else if g.fraction < 0.3 { 1 } else if g.fraction < 0.95 { 2 } else { 3 };
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (i, s) in steps.iter().enumerate() {
                 let c = if i < active { pal.link } else if i == active { pal.text } else { pal.text_faint };
                 ui.label(egui::RichText::new(if i < active { format!("✓ {s}") } else { s.to_string() }).size(12.0).color(c));
@@ -668,7 +678,7 @@ fn eta(g: &GenState) -> String {
 fn section(ui: &mut Ui, pal: &Palette, images: &std::collections::HashMap<String, crate::app::ImgState>, s: &Section, sources: &[Source], notes: &[Note], doc: &Doc, acts: &mut Vec<Action>) {
     if !s.heading.is_empty() {
         ui.add_space(10.0);
-        ui.label(egui::RichText::new(&s.heading).font(theme::bold(20.0)).color(pal.text));
+        ui.add(egui::Label::new(egui::RichText::new(&s.heading).font(theme::bold(20.0)).color(pal.text)).wrap());
         ui.add_space(4.0);
     }
     for b in &s.blocks {

@@ -157,13 +157,12 @@ pub fn apply(ctx: &egui::Context, pal: &Palette, scale: f32) {
     ctx.set_zoom_factor(scale.clamp(0.6, 2.0));
 }
 
-/// Load the desktop's sans-serif font (via fontconfig) as the proportional face, with a bold
+/// Load the system's sans-serif font (fontconfig on Linux, Roboto on Android) as the proportional face, with a bold
 /// face as the "bold" family. Falls back to egui's built-in faces.
 // TODO(windows): no fc-match on Windows; look in %WINDIR%\Fonts (Segoe UI) instead.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    let regular = fc_match("sans-serif:style=Regular").or_else(|| fc_match("sans-serif"));
-    let bold = fc_match("sans-serif:style=Bold").or_else(|| fc_match("sans-serif:weight=200"));
+    let (regular, bold) = crate::platform::system_sans_fonts();
     let mut bold_family = vec![];
     if let Some(bytes) = regular.as_ref().and_then(|p| std::fs::read(p).ok()) {
         fonts.font_data.insert("system-sans".into(), FontData::from_owned(bytes).into());
@@ -179,14 +178,6 @@ pub fn install_fonts(ctx: &egui::Context) {
     bold_family.extend(prop);
     fonts.families.insert(FontFamily::Name("bold".into()), bold_family);
     ctx.set_fonts(fonts);
-}
-
-fn fc_match(pattern: &str) -> Option<String> {
-    let out = std::process::Command::new("fc-match").args(["-f", "%{file}", pattern]).output().ok()?;
-    let path = String::from_utf8(out.stdout).ok()?;
-    let path = path.trim();
-    let ok = (path.ends_with(".ttf") || path.ends_with(".otf")) && std::path::Path::new(path).exists();
-    ok.then(|| path.to_string())
 }
 
 pub fn bold(size: f32) -> FontId {

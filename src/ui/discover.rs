@@ -59,7 +59,8 @@ impl App {
         widgets::column(ui, 980.0, |ui| {
             // Header: Research / News switch, AI-only toggle, refresh, progress.
             ui.horizontal(|ui| {
-                for (feed, label, icon) in [(FeedKind::Research, "Discover Research", "flask"), (FeedKind::News, "Discover News", "newspaper")] {
+                let short = ui.available_width() < 560.0;
+                for (feed, label, icon) in [(FeedKind::Research, if short { "Research" } else { "Discover Research" }, "flask"), (FeedKind::News, if short { "News" } else { "Discover News" }, "newspaper")] {
                     let sel = self.discover.feed == feed;
                     let r = ui
                         .add(
@@ -78,7 +79,7 @@ impl App {
                     if icon_button(ui, &pal, "refresh", "Refresh today's Discover (Ctrl+R)", false).clicked() {
                         acts.push(Action::RunDaily(true));
                     }
-                    if self.discover.feed == FeedKind::Research {
+                    if self.discover.feed == FeedKind::Research && !self.mobile {
                         let mut hide = self.settings.hide_ai_only;
                         if ui.checkbox(&mut hide, "Hide AI-only articles").on_hover_text("Show only real papers in Discover Research").changed() {
                             self.settings.hide_ai_only = hide;

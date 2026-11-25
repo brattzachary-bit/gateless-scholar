@@ -3,3 +3,5 @@
 *.AppImage
 /.flatpak-builder
 /build-dir
+*.apk
+*.keystore

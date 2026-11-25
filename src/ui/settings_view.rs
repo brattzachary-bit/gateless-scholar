@@ -26,6 +26,34 @@ impl App {
         ui.add_space(8.0);
         widgets::column(ui, 1400.0, |ui| {
             widgets::heading(ui, &pal, "Settings", None);
+            // Phones: the sections as a row of chips above the settings.
+            if self.mobile {
+                ui.horizontal_wrapped(|ui| {
+                    for (i, (name, _)) in SECTIONS.iter().enumerate() {
+                        if ui.selectable_label(self.settings_ui.section == i, *name).clicked() {
+                            self.settings_ui.section = i;
+                            if i == 4 {
+                                self.settings_ui.usage = Some(self.db.usage());
+                            }
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    match self.settings_ui.section {
+                        0 => self.settings_appearance(ui),
+                        1 => self.settings_models(ui),
+                        2 => self.settings_research(ui),
+                        3 => self.settings_discover(ui),
+                        4 => self.settings_storage(ui),
+                        5 => self.settings_citations(ui),
+                        _ => self.settings_about(ui),
+                    }
+                    ui.add_space(20.0);
+                    widgets::keep_focused_visible(ui);
+                });
+                return;
+            }
             // Two full-height panes: section list on the left, the section's settings filling the rest.
             let area = ui.available_rect_before_wrap();
             let nav = egui::Rect::from_min_max(area.min, egui::pos2(area.left() + 196.0, area.bottom()));
@@ -57,6 +85,7 @@ impl App {
                         _ => self.settings_about(ui),
                     }
                     ui.add_space(20.0);
+                    widgets::keep_focused_visible(ui);
                 });
             });
         });
@@ -98,6 +127,9 @@ impl App {
                 ctx.set_zoom_factor(s.ui_scale);
             }
             ui.add_space(8.0);
+            if crate::platform::is_android() {
+                return;
+            }
             ui.label(RichText::new("Window").font(theme::bold(15.0)));
             if ui.checkbox(&mut s.system_title_bar, "Use the desktop's title bar (takes effect after restart)").changed() {
                 save = true;
@@ -113,7 +145,7 @@ impl App {
             self.settings_changed();
         }
         ui.add_space(10.0);
-        if ui.button("Keyboard shortcuts…").clicked() {
+        if !crate::platform::is_android() && ui.button("Keyboard shortcuts…").clicked() {
             self.modal = Some(Modal::Shortcuts);
         }
     }
@@ -126,7 +158,8 @@ impl App {
 
         // Detected on this machine.
         let detected = self.detected.clone();
-        self.group(ui, "Found on this computer", |ui| match &detected {
+        let android = crate::platform::is_android();
+        self.group(ui, if android { "Found on this device" } else { "Found on this computer" }, |ui| match &detected {
             None => {
                 ui.horizontal(|ui| {
                     ui.spinner();
@@ -134,7 +167,7 @@ impl App {
                 });
             }
             Some(d) => {
-                for kind in [ProviderKind::ClaudeCli, ProviderKind::GeminiCli, ProviderKind::CodexCli] {
+                for kind in [ProviderKind::ClaudeCli, ProviderKind::GeminiCli, ProviderKind::CodexCli].into_iter().filter(|k| k.available_here()) {
                     let found = d.clis.iter().find(|(k, _)| *k == kind);
                     ui.horizontal(|ui| {
                         ui.add(icons::icon(if found.is_some() { "check" } else { "x" }, 15.0, if found.is_some() { pal.link } else { pal.text_faint }));
@@ -192,13 +225,15 @@ impl App {
         let mut remove = None;
         let mut test = None;
         let mut list_ollama = None;
+        let mut find_relay = None;
         let ollama_models = self.settings_ui.ollama_models.clone();
+        let relay_models = self.settings_ui.relay_models.clone();
         for (i, p) in self.settings.providers.iter_mut().enumerate() {
             egui::Frame::new().fill(pal.card).stroke(Stroke::new(1.0, pal.border)).corner_radius(10).inner_margin(12).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     changed |= ui.checkbox(&mut p.enabled, "").on_hover_text("Enabled").changed();
-                    changed |= ui.add(egui::TextEdit::singleline(&mut p.label).desired_width(200.0).font(theme::bold(14.5))).lost_focus();
+                    changed |= ui.add(egui::TextEdit::singleline(&mut p.label).desired_width(ui.available_width().min(200.0)).font(theme::bold(14.5))).lost_focus();
                     ui.label(RichText::new(p.kind.label()).size(12.0).color(pal.text_faint));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Remove").clicked() {
@@ -210,18 +245,44 @@ impl App {
                         }
                     });
                 });
-                egui::Grid::new(("prov", &p.id)).num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                let mobile = self.mobile;
+                let pid = p.id.clone();
+                // Phones: label above each field (one column); desktop: a two-column grid.
+                let body = |ui: &mut Ui| {
                     ui.label("Model");
                     ui.horizontal(|ui| {
-                        if p.kind == ProviderKind::Ollama && !ollama_models.is_empty() {
-                            egui::ComboBox::from_id_salt(("ollama_model", &p.id)).selected_text(&p.model).width(240.0).show_ui(ui, |ui| {
+                        if p.kind == ProviderKind::Relay {
+                            // Which of the PC's models to use ("" = the PC's default for articles).
+                            let info = relay_models.get(&p.id);
+                            let current = if p.model.is_empty() { "PC's default model".to_string() } else { p.label.clone() };
+                            egui::ComboBox::from_id_salt(("relay_model", &p.id)).selected_text(current).width(ui.available_width().min(240.0)).show_ui(ui, |ui| {
+                                if ui.selectable_label(p.model.is_empty(), "PC's default model").clicked() {
+                                    p.model.clear();
+                                    p.remote_brand = info.and_then(|i| i.default_id.as_ref().and_then(|d| i.models.iter().find(|m| &m.id == d))).map(|m| m.brand.clone());
+                                    changed = true;
+                                }
+                                for m in info.map(|i| i.models.as_slice()).unwrap_or(&[]) {
+                                    if ui.selectable_label(p.model == m.id, &m.describe).clicked() {
+                                        p.model = m.id.clone();
+                                        p.label = format!("{} (my PC)", m.label);
+                                        p.remote_brand = Some(m.brand.clone());
+                                        changed = true;
+                                    }
+                                }
+                            });
+                            let busy = self.settings_ui.testing.contains(&p.id);
+                            if ui.add_enabled(!busy, egui::Button::new(if busy { "Connecting…" } else { "Find models on my PC" }).small()).clicked() {
+                                find_relay = Some(p.clone());
+                            }
+                        } else if p.kind == ProviderKind::Ollama && !ollama_models.is_empty() {
+                            egui::ComboBox::from_id_salt(("ollama_model", &p.id)).selected_text(&p.model).width(ui.available_width().min(240.0)).show_ui(ui, |ui| {
                                 for m in &ollama_models {
                                     changed |= ui.selectable_value(&mut p.model, m.clone(), m).changed();
                                 }
                             });
                         } else {
                             let hint = if p.kind.is_cli() { "CLI default" } else { p.kind.default_model() };
-                            changed |= ui.add(egui::TextEdit::singleline(&mut p.model).hint_text(hint).desired_width(240.0)).lost_focus();
+                            changed |= ui.add(egui::TextEdit::singleline(&mut p.model).hint_text(hint).desired_width(ui.available_width().min(240.0))).lost_focus();
                         }
                         if p.kind == ProviderKind::Ollama && ui.small_button("Refresh list").clicked() {
                             list_ollama = Some(p.base_url.clone().unwrap_or_else(|| "http://localhost:11434".into()));
@@ -229,20 +290,35 @@ impl App {
                     });
                     ui.end_row();
                     if !p.kind.is_cli() {
-                        ui.label("Address");
+                        ui.label(if p.kind == ProviderKind::Relay { "PC address" } else { "Address" });
                         let mut url = p.base_url.clone().unwrap_or_default();
-                        if ui.add(egui::TextEdit::singleline(&mut url).desired_width(320.0)).lost_focus() {
+                        let hint = match p.kind {
+                            ProviderKind::Relay => "shown on your PC: Settings › Models › Use this PC from my phone",
+                            ProviderKind::Ollama if android => "http://<your PC>:11434, or http://localhost:11434 for Ollama on this phone",
+                            _ => "",
+                        };
+                        // Keep what's typed (the field is rebuilt from the setting every frame).
+                        let r = ui.add(egui::TextEdit::singleline(&mut url).hint_text(hint).desired_width(ui.available_width().min(320.0)));
+                        if r.changed() {
                             p.base_url = (!url.trim().is_empty()).then(|| url.trim().to_string());
+                        }
+                        if r.lost_focus() {
                             changed = true;
                         }
                         ui.end_row();
                     }
                     if p.kind.needs_api_key() {
-                        ui.label("API key");
+                        ui.label(if p.kind == ProviderKind::Relay { "Pairing code" } else { "API key" });
                         ui.horizontal(|ui| {
                             let has = secrets::get_api_key(&p.id).ok().flatten().is_some();
                             let input = self.settings_ui.api_key_inputs.entry(p.id.clone()).or_default();
-                            ui.add(egui::TextEdit::singleline(input).password(true).hint_text(if has { "saved in the system keyring" } else { "paste key" }).desired_width(240.0));
+                            let hint = match (has, android) {
+                                (true, true) => "saved on this device",
+                                (true, false) => "saved in the system keyring",
+                                (false, _) if p.kind == ProviderKind::Relay => "e.g. abcd-efgh-jkmn-pqrs",
+                                _ => "paste key",
+                            };
+                            ui.add(egui::TextEdit::singleline(input).password(p.kind != ProviderKind::Relay).hint_text(hint).desired_width(ui.available_width().min(240.0)));
                             if ui.button("Save").clicked() && !input.trim().is_empty() {
                                 match secrets::set_api_key(&p.id, input.trim()) {
                                     Ok(()) => {
@@ -262,11 +338,16 @@ impl App {
                     ui.label("Writing style");
                     changed |= ui.checkbox(&mut p.small_model, "Small model: write section by section with fewer sources each").changed();
                     ui.end_row();
-                });
+                };
+                if mobile {
+                    ui.vertical(body);
+                } else {
+                    egui::Grid::new(("prov", &pid)).num_columns(2).spacing([12.0, 6.0]).show(ui, body);
+                }
                 if let Some(r) = self.settings_ui.tests.get(&p.id) {
                     match r {
-                        Ok(t) => ui.colored_label(pal.link, format!("✓ {t}")),
-                        Err(e) => ui.colored_label(pal.danger, format!("✗ {e}")),
+                        Ok(t) => ui.colored_label(pal.link, format!("OK — {t}")),
+                        Err(e) => ui.colored_label(pal.danger, format!("Problem: {e}")),
                     };
                 }
             });
@@ -290,10 +371,25 @@ impl App {
         if let Some(url) = list_ollama {
             crate::jobs::list_ollama(self, url);
         }
+        if let Some(cfg) = find_relay {
+            if changed {
+                self.settings_changed();
+                changed = false;
+            }
+            self.settings_ui.testing.insert(cfg.id.clone());
+            crate::jobs::relay_info(self, cfg);
+        }
         ui.horizontal(|ui| {
             ui.menu_button("Add a model…", |ui| {
-                for k in ProviderKind::ALL {
-                    if ui.button(k.label()).clicked() {
+                for k in ProviderKind::ALL.into_iter().filter(|k| k.available_here()) {
+                    let tip = match k {
+                        ProviderKind::Relay => "Use the models set up in Gateless Scholar on your computer — e.g. Claude Code with your subscription",
+                        ProviderKind::Gemini => "Google's Gemini API — has a free tier",
+                        ProviderKind::Anthropic => "Claude via Anthropic's API (billed per use)",
+                        ProviderKind::Ollama => "A local model server: on your PC, or on this device",
+                        _ => "",
+                    };
+                    if ui.button(k.label()).on_hover_text(tip).clicked() {
                         let mut c = ProviderConfig::new(k);
                         if k == ProviderKind::Ollama
                             && let Some(m) = self.settings_ui.ollama_models.first()
@@ -323,7 +419,7 @@ impl App {
                 for t in Task::ALL {
                     ui.label(t.label());
                     let current = tasks.get(&t).and_then(|id| providers.iter().find(|p| &p.id == id)).map(|p| p.describe()).unwrap_or_else(|| "Default (first enabled)".into());
-                    egui::ComboBox::from_id_salt(("task", t)).selected_text(current).width(300.0).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt(("task", t)).selected_text(current).width(ui.available_width().min(300.0)).show_ui(ui, |ui| {
                         if ui.selectable_label(!tasks.contains_key(&t), "Default (first enabled)").clicked() {
                             tasks.remove(&t);
                             changed = true;
@@ -340,8 +436,11 @@ impl App {
             });
         });
         self.settings.task_providers = tasks;
+        if !android {
+            changed |= self.relay_server_settings(ui);
+        }
         let mut extra = self.settings.cli_extra_research;
-        if ui
+        if !android && ui
             .checkbox(&mut extra, "Let AI CLIs (Claude Code, Gemini CLI, Codex) do extra web research themselves")
             .on_hover_text("They always receive the sources Gateless Scholar found; this also lets them search the web. They're never allowed to edit files or run commands.")
             .changed()
@@ -354,6 +453,67 @@ impl App {
         }
     }
 
+    /// Desktop: let the phone app use this PC's models.
+    fn relay_server_settings(&mut self, ui: &mut Ui) -> bool {
+        let pal = self.pal;
+        let mut changed = false;
+        let mut enabled = self.settings.relay_enabled;
+        let mut port = self.settings.relay_port;
+        let mut new_code = false;
+        let running = self.relay.as_ref().map(|r| (r.port, r.code.clone()));
+        let error = self.relay_error.clone();
+        let mut copy = None;
+        self.group(ui, "Use this PC from my phone", |ui| {
+            ui.label(RichText::new("Lets Gateless Scholar on your phone use the models set up here — including Claude Code with your own subscription — while this app is open. Use it on your own Wi-Fi, or over Tailscale from anywhere (Tailscale also encrypts the connection).").size(12.5).color(pal.text_weak));
+            changed |= ui.checkbox(&mut enabled, "Let my phone use this PC's AI models").changed();
+            if enabled {
+                ui.horizontal(|ui| {
+                    ui.label("Port");
+                    changed |= ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).lost_focus();
+                });
+                if let Some(e) = &error {
+                    ui.colored_label(pal.danger, format!("Couldn't start: {e}"));
+                }
+                if let Some((port, code)) = &running {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("On your phone: Settings › Models › Add a model › Use my PC, then enter:").strong());
+                    egui::Grid::new("relay_pair").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
+                        for addr in crate::relay::local_addresses(*port) {
+                            ui.label("PC address");
+                            ui.label(RichText::new(&addr).monospace().color(pal.accent));
+                            if ui.small_button("Copy").clicked() {
+                                copy = Some(addr.split_whitespace().next().unwrap_or("").to_string());
+                            }
+                            ui.end_row();
+                        }
+                        ui.label("Pairing code");
+                        ui.label(RichText::new(code).monospace().size(16.0).color(pal.accent));
+                        ui.horizontal(|ui| {
+                            if ui.small_button("Copy").clicked() {
+                                copy = Some(code.clone());
+                            }
+                            if ui.small_button("New code").on_hover_text("Phones using the old code stop working until you enter the new one").clicked() {
+                                new_code = true;
+                            }
+                        });
+                        ui.end_row();
+                    });
+                    ui.label(RichText::new("Keep the pairing code private: anyone on your network with it can use your models.").size(12.0).color(pal.warn));
+                }
+            }
+        });
+        if let Some(c) = copy {
+            self.actions.push(crate::app::Action::Copy(c));
+        }
+        if new_code {
+            let _ = secrets::set_api_key("relay-pairing-code", &crate::relay::new_pairing_code());
+            changed = true;
+        }
+        self.settings.relay_enabled = enabled;
+        self.settings.relay_port = port;
+        changed
+    }
+
     fn settings_research(&mut self, ui: &mut Ui) {
         let pal = self.pal;
         let mut changed = false;
@@ -362,7 +522,7 @@ impl App {
         let mut email = self.settings.contact_email.clone();
         self.group(ui, "Contact email for research APIs (optional)", |ui| {
             ui.label(RichText::new("OpenAlex, Crossref and Unpaywall ask apps to include a contact email (their “polite pool” is faster). It's only sent to those APIs, never anywhere else.").size(12.5).color(pal.text_weak));
-            if ui.add(egui::TextEdit::singleline(&mut email).hint_text("you@example.org").desired_width(320.0)).lost_focus() {
+            if ui.add(egui::TextEdit::singleline(&mut email).hint_text("you@example.org").desired_width(ui.available_width().min(320.0))).lost_focus() {
                 changed = true;
             }
         });
@@ -381,7 +541,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(format!("{label}:"));
                     let has = secrets::get_api_key(id).ok().flatten().is_some();
-                    ui.add(egui::TextEdit::singleline(input).password(true).hint_text(if has { "saved" } else { "paste key" }).desired_width(240.0));
+                    ui.add(egui::TextEdit::singleline(input).password(true).hint_text(if has { "saved" } else { "paste key" }).desired_width(ui.available_width().min(240.0)));
                     if ui.button("Save").clicked() && !input.trim().is_empty() {
                         let _ = secrets::set_api_key(id, input.trim());
                         input.clear();
@@ -415,7 +575,7 @@ impl App {
                 changed = true;
             }
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut new_feed).hint_text("https://outlet.example/rss").desired_width(340.0));
+                ui.add(egui::TextEdit::singleline(&mut new_feed).hint_text("https://outlet.example/rss").desired_width(ui.available_width().min(340.0)));
                 if ui.button("Add feed").clicked() && new_feed.starts_with("http") {
                     feeds.push(new_feed.trim().to_string());
                     new_feed.clear();
@@ -499,7 +659,7 @@ impl App {
                 _ => {}
             }
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut new_tab).hint_text("New topic").desired_width(240.0));
+                ui.add(egui::TextEdit::singleline(&mut new_tab).hint_text("New topic").desired_width(ui.available_width().min(240.0)));
                 if ui.button("Add tab").clicked() && !new_tab.trim().is_empty() {
                     s.tabs.push(new_tab.trim().to_string());
                     new_tab.clear();

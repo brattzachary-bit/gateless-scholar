@@ -76,6 +76,19 @@ pub fn icon_dot(ui: &mut Ui, icon: &str, color: Color32, tip: &str) -> Response 
     resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// Call at the end of a scroll area's contents: if the text field being typed in is hidden
+/// (e.g. under the on-screen keyboard), scroll it into view.
+pub fn keep_focused_visible(ui: &mut Ui) {
+    if let Some(id) = ui.ctx().memory(|m| m.focused())
+        && let Some(r) = ui.ctx().read_response(id)
+    {
+        let clip = ui.clip_rect();
+        if r.rect.bottom() > clip.bottom() - 8.0 && r.rect.top() >= clip.top() - 400.0 && ui.ctx().egui_wants_keyboard_input() {
+            ui.scroll_to_rect(r.rect, Some(Align::Center));
+        }
+    }
+}
+
 pub fn heading(ui: &mut Ui, pal: &Palette, text: &str, sub: Option<&str>) {
     ui.add_space(6.0);
     ui.label(egui::RichText::new(text).font(theme::bold(24.0)).color(pal.text));
@@ -194,7 +207,9 @@ pub fn doc_card(ui: &mut Ui, env: &CardEnv, doc: &Doc, expanded: &mut bool, acts
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_top(|ui| {
-                card_image(ui, env, doc, acts);
+                // Phones: a smaller picture so the text keeps most of the width.
+                let compact = ui.available_width() < 560.0;
+                card_image(ui, env, doc, if compact { vec2(92.0, 76.0) } else { CARD_IMAGE }, acts);
                 ui.add_space(4.0);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
@@ -209,7 +224,9 @@ pub fn doc_card(ui: &mut Ui, env: &CardEnv, doc: &Doc, expanded: &mut bool, acts
                             badge(ui, "AI summary", pal.ai).on_hover_text("The headline and summary on this card were written by the AI.");
                         }
                         if let Some(p) = doc.paper() {
-                            let meta: Vec<String> = [p.venue.clone(), p.year.map(|y| y.to_string()), p.cited_by_count.filter(|c| *c > 0).map(|c| format!("{c} citations"))]
+                            // Metadata sometimes carries impossible years (e.g. 2121): hide those.
+                            let this_year = chrono::Datelike::year(&chrono::Utc::now());
+                            let meta: Vec<String> = [p.venue.clone(), p.year.filter(|y| *y <= this_year).map(|y| y.to_string()), p.cited_by_count.filter(|c| *c > 0).map(|c| format!("{c} citations"))]
                                 .into_iter()
                                 .flatten()
                                 .collect();
@@ -218,7 +235,8 @@ pub fn doc_card(ui: &mut Ui, env: &CardEnv, doc: &Doc, expanded: &mut bool, acts
                             }
                         }
                     });
-                    let title = ui.add(egui::Label::new(egui::RichText::new(doc.title()).font(theme::bold(16.5)).color(pal.text)).wrap().sense(Sense::click()));
+                    let title_size = if ui.available_width() < 420.0 { 15.0 } else { 16.5 };
+                    let title = ui.add(egui::Label::new(egui::RichText::new(doc.title()).font(theme::bold(title_size)).color(pal.text)).wrap().sense(Sense::click()));
                     if title.clicked() {
                         acts.push(Action::Open(doc.clone()));
                     }
@@ -283,9 +301,9 @@ pub fn outlet_names(basis: &[Paper], max: usize) -> Vec<String> {
         .collect()
 }
 
-fn card_image(ui: &mut Ui, env: &CardEnv, doc: &Doc, acts: &mut Vec<Action>) {
+fn card_image(ui: &mut Ui, env: &CardEnv, doc: &Doc, size: Vec2, acts: &mut Vec<Action>) {
     let pal = env.pal;
-    let (rect, resp) = ui.allocate_exact_size(CARD_IMAGE, Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let radius = CornerRadius::same(9);
     match env.image_for(doc, acts) {
         Some(img) if img.embeddable => {
@@ -335,7 +353,8 @@ fn placeholder(ui: &Ui, pal: &Palette, rect: Rect, kind: ContentKind) {
         ContentKind::AiArticle => "sparkle",
         _ => "flask",
     };
-    icons::icon(icon, 34.0, c.gamma_multiply(0.7)).paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(34.0)));
+    let s = (rect.height() * 0.32).clamp(20.0, 34.0);
+    icons::icon(icon, s, c.gamma_multiply(0.7)).paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(s)));
 }
 
 pub fn doc_action_buttons(ui: &mut Ui, env: &CardEnv, doc: &Doc, acts: &mut Vec<Action>) {

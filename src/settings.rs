@@ -56,6 +56,9 @@ pub struct Settings {
     pub cli_extra_research: bool,
     /// Has the first-run welcome been dismissed.
     pub welcomed: bool,
+    /// Desktop: let your phone use this PC's models ("Use my PC"), while the app is open.
+    pub relay_enabled: bool,
+    pub relay_port: u16,
 }
 
 impl Default for Settings {
@@ -86,6 +89,8 @@ impl Default for Settings {
             news_feeds: default_news_feeds(),
             cli_extra_research: false,
             welcomed: false,
+            relay_enabled: false,
+            relay_port: crate::relay::DEFAULT_PORT,
         }
     }
 }

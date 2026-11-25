@@ -35,10 +35,13 @@ pub enum ProviderKind {
     OpenAiCompatible,
     /// Local Ollama server.
     Ollama,
+    /// "Use my PC": the models set up in Gateless Scholar on your computer (e.g. Claude Code
+    /// with your subscription), reached over the local network or Tailscale.
+    Relay,
 }
 
 impl ProviderKind {
-    pub const ALL: [ProviderKind; 7] = [
+    pub const ALL: [ProviderKind; 8] = [
         ProviderKind::ClaudeCli,
         ProviderKind::GeminiCli,
         ProviderKind::CodexCli,
@@ -46,6 +49,7 @@ impl ProviderKind {
         ProviderKind::Gemini,
         ProviderKind::OpenAiCompatible,
         ProviderKind::Ollama,
+        ProviderKind::Relay,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -56,6 +60,7 @@ impl ProviderKind {
             ProviderKind::Gemini => "Google Gemini API",
             ProviderKind::OpenAiCompatible => "OpenAI-compatible API",
             ProviderKind::Ollama => "Ollama (local)",
+            ProviderKind::Relay => "Use my PC (Gateless Scholar desktop)",
         }
     }
     /// The name used in bylines: "Gateless Scholar + Claude".
@@ -66,10 +71,15 @@ impl ProviderKind {
             ProviderKind::CodexCli => "Codex",
             ProviderKind::OpenAiCompatible => "AI",
             ProviderKind::Ollama => "Ollama",
+            ProviderKind::Relay => "AI",
         }
     }
     pub fn needs_api_key(self) -> bool {
-        matches!(self, ProviderKind::Anthropic | ProviderKind::Gemini | ProviderKind::OpenAiCompatible)
+        matches!(self, ProviderKind::Anthropic | ProviderKind::Gemini | ProviderKind::OpenAiCompatible | ProviderKind::Relay)
+    }
+    /// Can this kind run on the current platform? (The AI CLIs can't run on a phone.)
+    pub fn available_here(self) -> bool {
+        !(self.is_cli() && crate::platform::is_android())
     }
     pub fn is_cli(self) -> bool {
         matches!(self, ProviderKind::ClaudeCli | ProviderKind::GeminiCli | ProviderKind::CodexCli)
@@ -82,6 +92,7 @@ impl ProviderKind {
             ProviderKind::Gemini => "gemini-2.5-flash",
             ProviderKind::OpenAiCompatible => "gpt-4o-mini",
             ProviderKind::Ollama => "llama3.1",
+            ProviderKind::Relay => "",
         }
     }
     pub fn default_base_url(self) -> Option<&'static str> {
@@ -90,6 +101,7 @@ impl ProviderKind {
             ProviderKind::Gemini => Some("https://generativelanguage.googleapis.com"),
             ProviderKind::OpenAiCompatible => Some("https://api.openai.com/v1"),
             ProviderKind::Ollama => Some("http://localhost:11434"),
+            ProviderKind::Relay => Some("http://192.168.1.2:7878"),
             _ => None,
         }
     }
@@ -109,6 +121,9 @@ pub struct ProviderConfig {
     pub enabled: bool,
     /// Treat as a small/weak model: write section by section with per-section sources.
     pub small_model: bool,
+    /// "Use my PC": the brand of the PC's chosen model, for bylines ("Claude").
+    #[serde(default)]
+    pub remote_brand: Option<String>,
 }
 
 impl ProviderConfig {
@@ -121,6 +136,7 @@ impl ProviderConfig {
             base_url: kind.default_base_url().map(String::from),
             enabled: true,
             small_model: matches!(kind, ProviderKind::Ollama),
+            remote_brand: None,
         }
     }
     pub fn describe(&self) -> String {
@@ -187,7 +203,7 @@ impl fmt::Display for ProviderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProviderError::NotInstalled(s) => write!(f, "{s} is not installed or not on PATH"),
-            ProviderError::MissingApiKey => write!(f, "no API key saved for this provider (Settings › Models)"),
+            ProviderError::MissingApiKey => write!(f, "no API key or pairing code saved for this provider (Settings › Models)"),
             ProviderError::Http(s) => write!(f, "HTTP error: {s}"),
             ProviderError::Process(s) => write!(f, "process error: {s}"),
             ProviderError::Parse(s) => write!(f, "could not read the model's reply: {s}"),
@@ -226,5 +242,9 @@ pub fn build(config: &ProviderConfig) -> anyhow::Result<SharedProvider> {
             Ok(Arc::new(http_api::HttpProvider::new(config.clone(), key)))
         }
         ProviderKind::Ollama => Ok(Arc::new(ollama::OllamaProvider::new(config.clone()))),
+        ProviderKind::Relay => {
+            let code = secrets::get_api_key(&config.id)?.ok_or(ProviderError::MissingApiKey)?;
+            Ok(Arc::new(crate::relay::RelayProvider::new(config.clone(), code)))
+        }
     }
 }

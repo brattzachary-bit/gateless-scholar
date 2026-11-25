@@ -46,6 +46,21 @@ chmod +x Gateless_Scholar-*-x86_64.AppImage
 
 It runs on practically any x86-64 Linux from 2018 onwards (glibc 2.28+: Ubuntu 18.10+, Debian 10+, Fedora 29+, Mint 19+), on Wayland or X11. If your system lacks FUSE, run it with `--appimage-extract-and-run`.
 
+## Android (preview)
+
+The same app runs on Android phones (Android 8.0+). Install `Gateless_Scholar-*-android-arm64.apk` from the releases page (allow installs from your browser or files app when asked).
+
+AI on the phone, in Settings › Models:
+
+- **Use my PC**: lets the phone use the models set up in Gateless Scholar on your computer, including **Claude Code on your own subscription** or a local Ollama. On the PC, turn on Settings › Models › *Use this PC from my phone*, then enter the PC address and pairing code it shows into the phone. This works on your own Wi-Fi, or from anywhere over [Tailscale](https://tailscale.com) (which also encrypts the connection). The PC app has to be open.
+- **Google Gemini API**: has a free tier.
+- **Anthropic API** (Claude, billed per use), or any **OpenAI-compatible** endpoint.
+- **Ollama**: on your PC (`http://<pc-ip>:11434`), or running on the phone itself (e.g. in Termux, `http://localhost:11434`).
+
+The AI command-line tools (Claude Code, Gemini CLI, Codex) can't run on a phone; "Use my PC" is how to reach them. API keys and the pairing code are kept in the app's private storage. Exports go to Downloads, and "Email" opens Android's share sheet.
+
+Building the APK needs the Android SDK + NDK and `cargo-apk`: `cargo apk build --release --target aarch64-linux-android`.
+
 ## Building
 
 ```sh

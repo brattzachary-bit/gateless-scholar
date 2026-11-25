@@ -56,6 +56,7 @@ pub enum AppEvent {
     OllamaModels { models: Vec<String> },
     Notified(usize),
     ProviderTest { id: String, result: Result<String, String> },
+    RelayInfo { id: String, result: Result<crate::relay::Info, String> },
     FoundImage { key: String, image: Option<ImageRef> },
 }
 
@@ -287,6 +288,8 @@ pub struct SettingsUi {
     pub openalex_key_input: String,
     pub usage: Option<crate::db::StorageUsage>,
     pub new_tab: String,
+    /// "Use my PC": models offered by the PC, per provider config id.
+    pub relay_models: HashMap<String, crate::relay::Info>,
 }
 
 pub struct App {
@@ -297,7 +300,8 @@ pub struct App {
     pub bus: Bus,
     rx: Receiver<AppEvent>,
     pub research: Research,
-    pub decision: craft_window::policy::Decision,
+    /// Who draws the window frame (desktop) — always `Native` on Android.
+    pub frame: craft_window::policy::Frame,
 
     pub view: View,
     pub back: Vec<View>,
@@ -330,10 +334,20 @@ pub struct App {
     /// Photos found for documents that had none (doc key → image, None = nothing found).
     pub found_images: HashMap<String, Option<ImageRef>>,
     pub image_jobs: Arc<tokio::sync::Semaphore>,
+    /// "Use this PC from my phone" server, while enabled.
+    pub relay: Option<crate::relay::Server>,
+    pub relay_error: Option<String>,
+    /// Phone-sized window: drawer instead of sidebar, compact bars and cards.
+    pub mobile: bool,
+    /// The slide-out navigation drawer (phone layout).
+    pub drawer_open: bool,
+    /// Whether we last asked Android to show the on-screen keyboard.
+    pub keyboard_shown: bool,
+    keyboard_off_since: Option<Instant>,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, db: Db, rt: tokio::runtime::Handle, decision: craft_window::policy::Decision) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, db: Db, rt: tokio::runtime::Handle, frame: craft_window::policy::Frame) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         theme::install_fonts(&cc.egui_ctx);
         let settings = db.load_settings();
@@ -351,7 +365,7 @@ impl App {
             bus,
             rx,
             research,
-            decision,
+            frame,
             view: View::Discover,
             back: vec![],
             forward: vec![],
@@ -380,12 +394,19 @@ impl App {
             learn: HashMap::new(),
             found_images: HashMap::new(),
             image_jobs: Arc::new(tokio::sync::Semaphore::new(3)),
+            relay: None,
+            relay_error: None,
+            mobile: false,
+            drawer_open: false,
+            keyboard_shown: false,
+            keyboard_off_since: None,
             settings,
         };
         if !app.settings.welcomed {
             app.modal = Some(Modal::Welcome);
         }
         jobs::detect_providers(&app);
+        app.sync_relay();
         // Command line: `gateless --open <doc key>` / `gateless --search <query>`.
         let args: Vec<String> = std::env::args().collect();
         for w in args.windows(2) {
@@ -461,9 +482,49 @@ impl App {
 
     pub fn settings_changed(&mut self) {
         self.provider_cache.clear();
+        self.sync_relay();
         self.research = Research::new(self.db.clone(), research_config(&self.settings));
         if let Err(e) = self.db.save_settings(&self.settings) {
             self.toast(format!("Could not save settings: {e}"), ToastKind::Error);
+        }
+    }
+
+    /// Start, stop or update the "Use my PC" relay to match settings (desktop only).
+    pub fn sync_relay(&mut self) {
+        if crate::platform::is_android() || !self.settings.relay_enabled {
+            self.relay = None;
+            self.relay_error = None;
+            return;
+        }
+        let offer = crate::relay::Offer {
+            // Never offer a relay through a relay.
+            providers: self.settings.providers.iter().filter(|p| p.kind != providers::ProviderKind::Relay).cloned().collect(),
+            default_id: self.settings.provider_for(Task::Articles).filter(|p| p.kind != providers::ProviderKind::Relay).map(|p| p.id.clone()),
+        };
+        let code = match providers::secrets::get_api_key("relay-pairing-code") {
+            Ok(Some(c)) => c,
+            _ => {
+                let c = crate::relay::new_pairing_code();
+                let _ = providers::secrets::set_api_key("relay-pairing-code", &c);
+                c
+            }
+        };
+        match &self.relay {
+            Some(r) if r.port == self.settings.relay_port && r.code == code => {
+                if let Ok(mut o) = r.offer.write() {
+                    *o = offer;
+                }
+            }
+            _ => {
+                self.relay = None;
+                match crate::relay::start(&self.rt, self.settings.relay_port, code, offer) {
+                    Ok(s) => {
+                        self.relay = Some(s);
+                        self.relay_error = None;
+                    }
+                    Err(e) => self.relay_error = Some(format!("{e:#}")),
+                }
+            }
         }
     }
 
@@ -477,6 +538,7 @@ impl App {
     // ------------------------------------------------------------------ navigation
 
     pub fn navigate(&mut self, view: View) {
+        self.drawer_open = false;
         if self.view != view {
             let prev = std::mem::replace(&mut self.view, view);
             self.back.push(prev);
@@ -573,7 +635,14 @@ impl App {
 
     pub fn toast(&mut self, text: impl Into<String>, kind: ToastKind) {
         let secs = if kind == ToastKind::Error { 7 } else { 4 };
-        self.toasts.push(Toast { text: text.into(), kind, until: Instant::now() + Duration::from_secs(secs) });
+        let text = text.into();
+        let until = Instant::now() + Duration::from_secs(secs);
+        // The same message again (e.g. several background tasks hitting one problem): show it once.
+        if let Some(t) = self.toasts.iter_mut().find(|t| t.text == text) {
+            t.until = until;
+            return;
+        }
+        self.toasts.push(Toast { text, kind, until });
     }
 
     pub fn request_image(&mut self, url: &str) {
@@ -760,6 +829,18 @@ impl App {
                     }
                     self.found_images.insert(key, image);
                 }
+                AppEvent::RelayInfo { id, result } => {
+                    self.settings_ui.testing.remove(&id);
+                    match result {
+                        Ok(info) => {
+                            self.settings_ui.tests.insert(id.clone(), Ok(format!("Connected to your PC — {} model(s) available", info.models.len())));
+                            self.settings_ui.relay_models.insert(id, info);
+                        }
+                        Err(e) => {
+                            self.settings_ui.tests.insert(id, Err(e));
+                        }
+                    }
+                }
                 AppEvent::ProviderTest { id, result } => {
                     self.settings_ui.testing.remove(&id);
                     self.settings_ui.tests.insert(id, result);
@@ -772,6 +853,11 @@ impl App {
 
     fn apply_actions(&mut self, ctx: &egui::Context) {
         let actions = std::mem::take(&mut self.actions);
+        // Actions change state after this frame was drawn: draw again so the change shows
+        // (on touch screens no further input event would trigger that frame).
+        if !actions.is_empty() {
+            ctx.request_repaint();
+        }
         for a in actions {
             match a {
                 Action::Open(doc) => self.open_doc(doc),
@@ -819,11 +905,7 @@ impl App {
                     self.image_viewer = Some(img);
                 }
                 Action::LoadImage(url) => self.request_image(&url),
-                Action::OpenUrl(url) => {
-                    if let Err(e) = open::that_detached(&url) {
-                        self.toast(format!("Could not open link: {e}"), ToastKind::Error);
-                    }
-                }
+                Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
                 Action::Copy(text) => {
                     ctx.copy_text(text);
                     self.toast("Copied", ToastKind::Info);
@@ -1116,6 +1198,29 @@ impl eframe::App for App {
         self.shortcuts(&ctx);
         self.draw(ui);
         self.apply_actions(&ctx);
+        // Android: show the on-screen keyboard while a text field has focus (this egui does
+        // not request it there itself). A tap briefly drops focus on touch-down, so only hide
+        // once focus has been gone for a moment.
+        if crate::platform::is_android() {
+            let wants = ctx.egui_wants_keyboard_input();
+            if wants {
+                self.keyboard_off_since = None;
+                if !self.keyboard_shown {
+                    crate::platform::set_soft_keyboard(true);
+                    self.keyboard_shown = true;
+                }
+                ctx.request_repaint_after(Duration::from_millis(250));
+            } else if self.keyboard_shown {
+                let since = *self.keyboard_off_since.get_or_insert_with(Instant::now);
+                if since.elapsed() > Duration::from_millis(300) {
+                    crate::platform::set_soft_keyboard(false);
+                    self.keyboard_shown = false;
+                    self.keyboard_off_since = None;
+                } else {
+                    ctx.request_repaint_after(Duration::from_millis(100));
+                }
+            }
+        }
         if !self.toasts.is_empty() || self.daily.running || !self.gens.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(250));
         } else {

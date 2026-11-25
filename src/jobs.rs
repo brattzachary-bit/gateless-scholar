@@ -31,6 +31,16 @@ pub fn list_ollama(app: &App, base_url: String) {
     });
 }
 
+/// "Use my PC": ask the PC which models it offers (and check the pairing code).
+pub fn relay_info(app: &App, cfg: ProviderConfig) {
+    let bus = app.bus.clone();
+    app.rt.spawn(async move {
+        let code = providers::secrets::get_api_key(&cfg.id).ok().flatten().unwrap_or_default();
+        let result = crate::relay::fetch_info(cfg.base_url.as_deref().unwrap_or(""), &code).await.map_err(|e| format!("{e:#}"));
+        bus.send(AppEvent::RelayInfo { id: cfg.id, result });
+    });
+}
+
 pub fn test_provider(app: &App, cfg: ProviderConfig) {
     let bus = app.bus.clone();
     app.rt.spawn(async move {
@@ -521,30 +531,37 @@ pub fn export(app: &App, kind: ExportKind, article: Article) {
         let stem: String = article.title.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').take(60).collect::<String>().trim().replace(' ', "-");
         let stem = if stem.is_empty() { "article".to_string() } else { stem };
         let result: anyhow::Result<String> = async {
+            let txt_name = format!("{stem}.txt");
             match kind {
+                #[cfg(not(target_os = "android"))]
                 ExportKind::Print => Ok(crate::export::print(&article, style)?),
+                #[cfg(not(target_os = "android"))]
                 ExportKind::Email => {
                     crate::export::email(&article, style)?;
                     Ok("Opened your mail client".to_string())
                 }
-                ExportKind::Txt | ExportKind::Docx | ExportKind::Pdf => {
-                    let (ext, name) = match kind {
-                        ExportKind::Txt => ("txt", "Text"),
-                        ExportKind::Docx => ("docx", "Word document"),
-                        _ => ("pdf", "PDF"),
-                    };
-                    // TODO(windows): rfd's xdg-portal backend is Linux-only; Windows needs its default backend.
-                    let Some(file) = rfd::AsyncFileDialog::new().set_file_name(format!("{stem}.{ext}")).add_filter(name, &[ext]).save_file().await else {
-                        return Ok(String::new());
-                    };
-                    let path = file.path().to_path_buf();
-                    match kind {
-                        ExportKind::Txt => std::fs::write(&path, crate::export::to_txt(&article, style))?,
-                        ExportKind::Docx => crate::export::to_docx(&article, style, &path)?,
-                        _ => crate::export::to_pdf(&article, style, &path)?,
-                    }
-                    Ok(format!("Saved {}", path.display()))
+                // Android: printing goes through a PDF in Downloads (open it, then Print);
+                // email/sharing through the share sheet.
+                #[cfg(target_os = "android")]
+                ExportKind::Print => {
+                    let (bytes, _) = crate::export::pdf_bytes(&article, style)?;
+                    let msg = crate::platform::save_file(&format!("{stem}.pdf"), "application/pdf", bytes).await?.unwrap_or_default();
+                    Ok(format!("{msg} — open it and choose Print"))
                 }
+                #[cfg(target_os = "android")]
+                ExportKind::Email => {
+                    crate::platform::share_text(&crate::export::email_subject(&article), &crate::export::to_txt(&article, style))?;
+                    Ok(String::new())
+                }
+                ExportKind::Txt => Ok(crate::platform::save_file(&txt_name, "text/plain", crate::export::to_txt(&article, style).into_bytes()).await?.unwrap_or_default()),
+                ExportKind::Docx => Ok(crate::platform::save_file(
+                    &format!("{stem}.docx"),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    crate::export::docx_bytes(&article, style)?,
+                )
+                .await?
+                .unwrap_or_default()),
+                ExportKind::Pdf => Ok(crate::platform::save_file(&format!("{stem}.pdf"), "application/pdf", crate::export::pdf_bytes(&article, style)?.0).await?.unwrap_or_default()),
             }
         }
         .await;
@@ -559,13 +576,16 @@ pub fn export(app: &App, kind: ExportKind, article: Article) {
 /// Save a bibliography (text, BibTeX or RIS) chosen in the Bibliography view.
 pub fn save_text_file(app: &App, default_name: String, filter: (&'static str, &'static str), contents: String) {
     let bus = app.bus.clone();
+    let mime = match filter.1 {
+        "bib" => "application/x-bibtex",
+        "ris" => "application/x-research-info-systems",
+        _ => "text/plain",
+    };
     app.rt.spawn(async move {
-        let Some(file) = rfd::AsyncFileDialog::new().set_file_name(&default_name).add_filter(filter.0, &[filter.1]).save_file().await else {
-            return;
-        };
-        match std::fs::write(file.path(), contents) {
-            Ok(()) => bus.toast(format!("Saved {}", file.path().display()), ToastKind::Success),
-            Err(e) => bus.toast(format!("Could not save: {e}"), ToastKind::Error),
+        match crate::platform::save_file(&default_name, mime, contents.into_bytes()).await {
+            Ok(Some(msg)) => bus.toast(msg, ToastKind::Success),
+            Ok(None) => {}
+            Err(e) => bus.toast(format!("Could not save: {e:#}"), ToastKind::Error),
         }
     });
 }

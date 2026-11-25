@@ -26,7 +26,11 @@ impl App {
             ui.ctx().request_repaint_after(Duration::from_millis(300));
         }
 
-        let list_w = 250.0;
+        // Phones: the list on its own, or the open note on its own.
+        let mobile = self.mobile;
+        let show_list = !mobile || self.notes.selected.is_none();
+        let list_w = if mobile { ui.available_width() } else { 250.0 };
+        if show_list {
         egui::Panel::left("notes_list").exact_size(list_w).frame(egui::Frame::new().fill(pal.bg).inner_margin(10).stroke(Stroke::new(1.0, pal.border))).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Notes").font(theme::bold(18.0)));
@@ -86,9 +90,20 @@ impl App {
                 }
             });
         });
+        }
+        if mobile && show_list {
+            self.actions.extend(acts);
+            return;
+        }
 
         egui::CentralPanel::default().frame(egui::Frame::new().fill(pal.bg).inner_margin(16)).show(ui, |ui| {
-            let sel = self.notes.selected.or(notes.first().map(|n| n.id));
+            if mobile && ui.add(egui::Button::image_and_text(icons::icon("chevron-left", 15.0, pal.text_weak), "All notes").frame(false)).clicked() {
+                self.flush_note();
+                self.notes.selected = None;
+                self.notes.editing = None;
+                return;
+            }
+            let sel = self.notes.selected.or(if mobile { None } else { notes.first().map(|n| n.id) });
             if self.notes.editing.as_ref().map(|n| n.id) != sel {
                 self.flush_note();
                 self.notes.editing = sel.and_then(|id| self.db.notes(None).into_iter().find(|n| n.id == id));
@@ -196,6 +211,7 @@ impl App {
                         note.quotes.remove(i);
                         changed = true;
                     }
+                    widgets::keep_focused_visible(ui);
                 });
             });
             if changed {

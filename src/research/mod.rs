@@ -172,13 +172,14 @@ pub fn topic_photo_queries(topic: &str) -> Vec<String> {
         "medicine" | "health" => &["Medicine", "Hospital"],
         "physics" => &["Particle accelerator", "Physics"],
         "neuroscience" => &["Neuron", "Human brain"],
+        "" | "for you" | "science" => &["Laboratory glassware", "Microscope", "Hubble Space Telescope", "DNA", "Particle accelerator"],
         _ => &[],
     };
     let mut out: Vec<String> = v.iter().map(|s| s.to_string()).collect();
     if !t.is_empty() && t != "for you" {
         out.push(topic.trim().to_string());
     }
-    out.push("Laboratory".into());
+    out.push("Laboratory glassware".into());
     out
 }
 
